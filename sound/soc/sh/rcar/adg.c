@@ -472,6 +472,7 @@ static int rsnd_adg_get_clkout(struct rsnd_priv *priv)
 	uint32_t count = 0;
 	unsigned long req_48kHz_rate, req_441kHz_rate;
 	int i, req_size;
+	int approximate = 0;
 	const char *parent_clk_name = NULL;
 	static const char * const clkout_name[] = {
 		[CLKOUT]  = "audio_clkout",
@@ -529,6 +530,22 @@ static int rsnd_adg_get_clkout(struct rsnd_priv *priv)
 	 *	rsnd_adg_ssi_clk_try_start()
 	 *	rsnd_ssi_master_clk_start()
 	 */
+
+	/*
+	 * [APPROXIMATE]
+	 *
+	 * clk_i (internal clock) can't create accurate rate,
+	 * thus use approximate rate.
+	 *
+	 * sample settings
+	 *
+	 *	clock-frequency = <12288000 11025000>;
+	 *
+	 *	clk_i			= 199999992
+	 *	req_441kHz_rate		= 11025000 (= 44100 x 250)(=~ 199999992 / 18)
+	 *	req_48kHz_rate		= 12288000 (= 48000 x 256)(=~ 199999992 / 16)
+	 */
+
 	adg->rbga_rate_for_441khz	= 0;
 	adg->rbgb_rate_for_48khz	= 0;
 	for_each_rsnd_clk(clk, adg, i) {
@@ -537,7 +554,14 @@ static int rsnd_adg_get_clkout(struct rsnd_priv *priv)
 		if (0 == rate) /* not used */
 			continue;
 
+		if (i != CLKI)
+			continue; 
+
 		/* RBGA */
+		if (i == CLKI)
+			/* see [APPROXIMATE] */
+			rate = (clk_get_rate(clk) / req_441kHz_rate) * req_441kHz_rate;
+
 		if (!adg->rbga_rate_for_441khz && (0 == rate % 44100)) {
 			div = 6;
 			if (req_441kHz_rate)
@@ -550,10 +574,16 @@ static int rsnd_adg_get_clkout(struct rsnd_priv *priv)
 				if (req_441kHz_rate &&
 				    !rsnd_flags_has(adg, AUDIO_OUT_48))
 					parent_clk_name = __clk_get_name(clk);
+				if (i == CLKI)
+					approximate = 1;
 			}
 		}
 
 		/* RBGB */
+		if (i == CLKI)
+			/* see [APPROXIMATE] */
+			rate = (clk_get_rate(clk) / req_48kHz_rate) * req_48kHz_rate;
+
 		if (!adg->rbgb_rate_for_48khz && (0 == rate % 48000)) {
 			div = 6;
 			if (req_48kHz_rate)
@@ -566,9 +596,15 @@ static int rsnd_adg_get_clkout(struct rsnd_priv *priv)
 				if (req_48kHz_rate &&
 				    rsnd_flags_has(adg, AUDIO_OUT_48))
 					parent_clk_name = __clk_get_name(clk);
+				if (i == CLKI)
+					approximate = 1;
+
 			}
 		}
 	}
+
+	if (approximate)
+		dev_info(dev, "It uses CLK_I as approximate rate");
 
 	/*
 	 * ADG supports BRRA/BRRB output only.
